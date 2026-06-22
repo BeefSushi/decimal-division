@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>しょうすうのわり算 ひっ算ランド</title>
-<style>
+<style>z
   @import url('https://fonts.googleapis.com/css2?family=Yomogi&family=M+PLUS+Rounded+1c:wght@400;700;800&display=swap');
 
   :root{
@@ -136,19 +136,22 @@
   .digit-input:focus{background:#eaf4fb;border-style:solid;}
   .digit-input.good{border-color:var(--green);background:#e7f7ee;color:var(--green-deep);border-style:solid;}
   .digit-input.bad{border-color:var(--red);background:#fdeae6;animation:shake .3s;}
-  @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
-  /* 小数点マス（タップで点を置く） */
-  .dot-slot{
-    width:16px;height:var(--cell);display:grid;place-items:end center;
-    cursor:pointer;padding-bottom:4px;
+  @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}/* 小数点マス（商の行に横並び・タップで位置を選ぶ） */
+  .dot-cell{
+    width:18px;height:var(--cell);
+    display:grid;place-items:center;
+    cursor:pointer;
   }
-  .dot-slot .dotmark{
-    width:10px;height:10px;border-radius:50%;background:transparent;
-    border:2px dashed var(--red-soft);transition:.12s;
+  .dot-cell .dotmark{
+    width:11px;height:11px;border-radius:50%;
+    background:transparent;border:2px dashed var(--red-soft);
+    margin-top:auto;margin-bottom:5px;transition:.12s;
   }
-  .dot-slot.on .dotmark{background:var(--red);border-color:var(--red);}
-  .dot-slot.good .dotmark{background:var(--green);border-color:var(--green);}
-  .dot-slot.bad .dotmark{border-color:var(--red);border-style:solid;animation:shake .3s;}
+  .dot-cell.on .dotmark{background:var(--red);border-color:var(--red);transform:scale(1.15);}
+  .dot-cell.good .dotmark{background:var(--green);border-color:var(--green);}
+  .dot-cell.bad .dotmark{border-color:var(--red);border-style:solid;animation:shake .3s;}
+  /* 数字の下に来る点の隙間そろえ用 */
+  .dot-gap{width:18px;height:var(--cell);}
 
   .divider-bracket{border-top:3px solid var(--ink);border-left:3px solid var(--ink);border-top-left-radius:10px;}
   .overbar{border-top:3px solid var(--ink);}
@@ -489,135 +492,173 @@ function buildCalc(){
   const area=document.getElementById('calcArea');
   area.innerHTML='';
   inputs=[]; dotSlots=[]; activeInput=0;
+  let dotPicked = -1; // 選ばれている点候補のindex（1つだけ）
 
-  const nCols = p.digits.length;        // 整数化わられる数の桁数
+  const nCols = p.digits.length;   // 整数化わられる数の桁数
   const cellPx = 38;
+  const dotPx = 18;
 
-  // ----- 行1: 商 -----
-  // 商は各桁を「対応するわられる数の桁の上」に置く（標準長除法）。
-  // qDigitsRaw（先頭0含む）を桁位置に対応させる。
-  // 先頭0は空マスにする。
-  const row1 = document.createElement('div');
-  row1.className='ld';
-  row1.style.gridTemplateColumns=`${cellPx}px repeat(${nCols}, ${cellPx}px)`;
-  // 左端空白
-  row1.appendChild(blankCell());
-  // 商マス（各列）
+  // 商の各列が「数字を持つか(=有効桁)」を判定
+  // qDigitsRaw は列と1対1。先頭firstNonZero個は0なので空マス。
+  // 点候補は「有効な商の数字」の前後すべての隙間に置く。
+  // 商の小数点の正解位置: 右からdotFromRight桁前（= 有効商の中での位置）。
+
+  // 有効な商の列リスト（先頭0を除いた列番号）
+  const qCols = [];
   for(let col=0; col<nCols; col++){
-    const raw = p.qDigitsRawLen - nCols + col; // 通常 qDigitsRawLen===nCols
-    const isLeadingZero = (col < p.firstNonZero);
-    if(isLeadingZero){
+    if(col>=p.firstNonZero) qCols.push(col);
+  }
+  // 正解の点位置を「qColsの何番目の数字の前か」に変換
+  // dotFromRight=1 なら 最後の数字の前。dotFromRight=k なら 後ろからk番目の数字の前。
+  // 隙間index: 0=先頭の前, 1=1番目と2番目の間, ... qCols.length=末尾の後
+  const correctGap = (p.dotFromRight>0) ? (qCols.length - p.dotFromRight) : -1;
+
+  // ----- 共通: 商行を作る（数字マスと点候補マスを横並び） -----
+  // グリッド列構成: [左:わる数ぶんの空] [点][数字][点][数字]...[点]
+  // 左端の幅は cellPx（わる数1〜2桁を右寄せ）。
+  // 各数字列の前に dotPx の点マスを挟む。
+  function makeColTemplate(){
+    let t = `${cellPx}px`;
+    for(let i=0;i<nCols;i++){ t += ` ${dotPx}px ${cellPx}px`; }
+    t += ` ${dotPx}px`; // 末尾の点
+    return t;
+  }
+
+  // ===== 行1: 商（点候補つき） =====
+  const row1=document.createElement('div');
+  row1.className='ld';
+  row1.style.gridTemplateColumns=makeColTemplate();
+  row1.appendChild(blankCell()); // 左端（わる数の上は空）
+
+  let gapCounter = 0; // qCols基準の隙間カウンタ
+  for(let col=0; col<nCols; col++){
+    const isLeading = (col < p.firstNonZero);
+    // この数字の前の点マス
+    if(!isLeading){
+      // 有効桁の前 → 点候補を置く
+      const gapIdx = gapCounter; // 0,1,2...
+      row1.appendChild(makeDotCell(gapIdx, p, correctGap, ()=>{
+        selectDot(gapIdx);
+      }));
+      gapCounter++;
+    }else{
+      // 先頭0の前は点を置かない（空の細マス）
+      const sp=document.createElement('div'); sp.className='dot-gap';
+      row1.appendChild(sp);
+    }
+    // 数字マス
+    if(isLeading){
       row1.appendChild(blankCell());
     }else{
-      const expect = p.steps[col].qd;
-      const inp=mkInput(expect);
-      row1.appendChild(inp);
+      row1.appendChild(mkInput(p.steps[col].qd));
     }
+  }
+  // 末尾の点マス
+  {
+    const gapIdx = gapCounter;
+    row1.appendChild(makeDotCell(gapIdx, p, correctGap, ()=>{ selectDot(gapIdx); }));
   }
   area.appendChild(row1);
 
-  // ----- 小数点スロットの行（行1と行2の間） -----
-  // 商の小数点は「右からdotFromRight桁前」。列でいうと nCols-dotFromRight の前。
-  if(p.dotFromRight>0){
-    const dotRow=document.createElement('div');
-    dotRow.className='ld';
-    dotRow.style.gridTemplateColumns=`${cellPx}px repeat(${nCols}, ${cellPx}px)`;
-    dotRow.style.marginTop='-6px';
-    dotRow.style.marginBottom='-6px';
-    dotRow.appendChild(blankCell(16));
-    const dotCol = nCols - p.dotFromRight; // この列の「左境界」に点
-    for(let col=0; col<nCols; col++){
-      // 点は dotCol 番目のマスの左に置きたいので、(dotCol-1)列の右端に小さなスロット
-      if(col === dotCol-1 && col>=p.firstNonZero-1){
-        const slot=mkDotSlot();
-        // セル内の右端に寄せる
-        const wrap=document.createElement('div');
-        wrap.style.width=cellPx+'px';wrap.style.height='14px';
-        wrap.style.display='flex';wrap.style.justifyContent='flex-end';
-        wrap.appendChild(slot);
-        dotRow.appendChild(wrap);
-      }else{
-        const sp=document.createElement('div');
-        sp.style.width=cellPx+'px';sp.style.height='14px';
-        dotRow.appendChild(sp);
-      }
-    }
-    // 行1の直後に挿入したいので、area先頭付近に入れ直す
-    area.insertBefore(dotRow, row1.nextSibling);
+  // selectDot: 点候補は1つだけonにする
+  function selectDot(idx){
+    dotPicked = idx;
+    dotSlots.forEach((o)=>{
+      o.on = (o.gapIdx===idx);
+      o.el.classList.toggle('on',o.on);
+      o.el.classList.remove('good','bad');
+    });
   }
 
-  // ----- 行2: わる数 ) わられる数 -----
+  // ===== 行2: わる数 ) わられる数 =====
   const row2=document.createElement('div');
   row2.className='ld';
-  row2.style.gridTemplateColumns=`${cellPx}px repeat(${nCols}, ${cellPx}px)`;
+  row2.style.gridTemplateColumns=makeColTemplate();
   const dCell=document.createElement('div');
   dCell.className='cell fixed';
   dCell.style.justifyContent='flex-end';
   dCell.textContent=p.bShown;
   row2.appendChild(dCell);
   for(let col=0; col<nCols; col++){
+    // 数字の前の点マス位置は空ける
+    const sp=document.createElement('div'); sp.className='dot-gap'; sp.style.height=cellPx+'px';
+    row2.appendChild(sp);
     const cell=document.createElement('div');
     cell.className='cell fixed '+(col===0?'divider-bracket':'overbar');
     cell.textContent=p.digits[col];
     row2.appendChild(cell);
   }
+  // 末尾の点マス位置
+  const spEnd=document.createElement('div'); spEnd.className='dot-gap'; spEnd.style.height=cellPx+'px';
+  row2.appendChild(spEnd);
   area.appendChild(row2);
 
-  // ----- 各ステップ: かけ算の答え と ひき算の答え -----
-  // 標準筆算では各段は1〜2桁で、対応する位の下に右寄せされる。
-  // ここでは簡略化し、各有効ステップについて
-  //   prod(かけ算の答え) を「その位までの列」に右寄せ入力
-  //   sub(ひき算の答え) を同じ右端列に入力（下線つき）
-  // を縦に積む。
+  // ===== 各ステップ: かけ算の答え と ひき算の答え =====
   for(let col=p.firstNonZero; col<nCols; col++){
     const st=p.steps[col];
-    // この段の右端列 = col。左端 = col - (prod.length-1)
-    // prod行
+
+    // --- かけ算の答え(prod) ---
     const prodRow=document.createElement('div');
     prodRow.className='ld';
-    prodRow.style.gridTemplateColumns=`${cellPx}px repeat(${nCols}, ${cellPx}px)`;
+    prodRow.style.gridTemplateColumns=makeColTemplate();
     prodRow.appendChild(blankCell());
     const prodStr=st.prod;
     const prodStart=col-(prodStr.length-1);
     for(let c=0;c<nCols;c++){
+      const sp=document.createElement('div'); sp.className='dot-gap'; sp.style.height=cellPx+'px';
+      prodRow.appendChild(sp);
       if(c>=prodStart && c<=col){
-        const idx=c-prodStart;
-        prodRow.appendChild(mkInput(prodStr[idx]));
+        prodRow.appendChild(mkInput(prodStr[c-prodStart]));
       }else{
         prodRow.appendChild(blankCell());
       }
     }
+    const spP=document.createElement('div'); spP.className='dot-gap'; spP.style.height=cellPx+'px';
+    prodRow.appendChild(spP);
     area.appendChild(prodRow);
 
-    // sub行（ひき算の答え, 下線つき）
+    // --- ひき算の答え(sub, 下線つき) ---
     const subRow=document.createElement('div');
     subRow.className='ld';
-    subRow.style.gridTemplateColumns=`${cellPx}px repeat(${nCols}, ${cellPx}px)`;
+    subRow.style.gridTemplateColumns=makeColTemplate();
     subRow.appendChild(blankCell());
-    const subStr=st.sub; // ひき算の答え(0〜)
-    // 表示桁: 右端col。長さsubStr.length。ただし0なら1桁"0"。
+    const subStr=st.sub;
     const subStart=col-(subStr.length-1);
     for(let c=0;c<nCols;c++){
-      const cell=document.createElement('div');
-      // 下線は prod の範囲に引く
-      if(c>=prodStart && c<=col){ cell.className='subline-cell'; cell.style.width=cellPx+'px';cell.style.height=cellPx+'px'; }
-      else { cell.style.width=cellPx+'px';cell.style.height=cellPx+'px'; }
+      const sp=document.createElement('div'); sp.className='dot-gap'; sp.style.height=cellPx+'px';
+      subRow.appendChild(sp);
       if(c>=subStart && c<=col){
-        const idx=c-subStart;
-        const inp=mkInput(subStr[idx]);
+        const inp=mkInput(subStr[c-subStart]);
         inp.classList.add('subline-cell');
-        cell.replaceWith(inp);
         subRow.appendChild(inp);
-        continue;
+      }else if(c>=prodStart && c<=col){
+        // 下線だけ引く空マス
+        const cell=document.createElement('div');
+        cell.className='subline-cell';
+        cell.style.width=cellPx+'px'; cell.style.height=cellPx+'px';
+        subRow.appendChild(cell);
+      }else{
+        subRow.appendChild(blankCell());
       }
-      subRow.appendChild(cell);
     }
+    const spS=document.createElement('div'); spS.className='dot-gap'; spS.style.height=cellPx+'px';
+    subRow.appendChild(spS);
     area.appendChild(subRow);
   }
 
-  // フォーカス初期化
   if(inputs.length) setActive(0);
   buildKeypad();
+}
+
+// 点候補マスを作る
+function makeDotCell(gapIdx, p, correctGap, onTap){
+  const cell=document.createElement('div');
+  cell.className='dot-cell';
+  cell.innerHTML='<div class="dotmark"></div>';
+  const obj={el:cell, gapIdx, on:false, isCorrect:(gapIdx===correctGap)};
+  cell.addEventListener('click', onTap);
+  dotSlots.push(obj);
+  return cell;
 }
 
 function blankCell(w){
@@ -687,22 +728,31 @@ function checkAnswer(){
   const p=game.problem;
   let allOk=true;
 
-  // 数字マス
+  // 数字マスの判定
   inputs.forEach(o=>{
     if(o.el.value.trim()===o.expect){ o.el.classList.add('good'); o.el.classList.remove('bad'); }
     else { o.el.classList.add('bad'); o.el.classList.remove('good'); allOk=false; }
   });
 
-  // 小数点スロット（dotFromRight>0のとき、正しいスロットだけonであるべき）
+  // 小数点の判定（商に小数点が必要な問題のときだけ）
   if(p.dotFromRight>0){
-    dotSlots.forEach(o=>{
-      // スロットは1つだけ作っている（正しい位置）→ onなら正解
-      if(o.on){ o.el.classList.add('good'); o.el.classList.remove('bad'); }
-      else { o.el.classList.add('bad'); o.el.classList.remove('good'); allOk=false; }
-    });
+    // 正しい候補だけがonになっているか
+    let picked=null;
+    dotSlots.forEach(o=>{ if(o.on) picked=o; });
+    dotSlots.forEach(o=>{ o.el.classList.remove('good','bad'); });
+    if(picked && picked.isCorrect){
+      picked.el.classList.add('good');
+    }else{
+      allOk=false;
+      // 正しい位置を赤で示す
+      dotSlots.forEach(o=>{ if(o.isCorrect) o.el.classList.add('bad'); });
+      if(picked && !picked.isCorrect) picked.el.classList.add('bad');
+    }
   }
 
-  if(allOk && inputs.every(o=>o.el.value!=='')) onCorrect();
+  // 全数字が埋まっているかも確認
+  const allFilled = inputs.every(o=>o.el.value!=='');
+  if(allOk && allFilled) onCorrect();
   else onWrong();
 }
 
